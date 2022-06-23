@@ -1,11 +1,11 @@
 #Coin config
-RPChost = 'http://127.0.0.1:8332/'
-RPCuser = 'username'
-RPCpass = 'password'
+node_URL = "https://node-1.siricoin.tech:5006"
 
-explorer = 'https://explorer.powx.org/tx/'
+explorer = 'https://explorer.siricoin.tech/transaction.html?hash='
 
-Cointicker = 'oBTC'
+Cointicker = 'Siri'
+CoinName = 'Siricoin'
+BlockReward = 50
 
 Contact = "@The Red Eye Studio#8319"
 
@@ -17,15 +17,23 @@ Contact = "@The Red Eye Studio#8319"
 prefix = '/'
 
 #Imports
-from datetime import datetime
+from termcolor import colored
 from discord.ext import commands
-from discord_slash import SlashCommand, SlashContext
+from discord_slash import SlashCommand
 from firebase_admin import credentials, firestore
-import requests, decimal, json, discord, os, hashlib, time, pyotp, firebase_admin, qrcode, discord_slash
+from eth_account import Account
+from siricoin import siriCoin
+from Web3Decode import DecodeRawTX
+import requests, discord, os, pyotp, firebase_admin, qrcode, secrets, json
+
 
 #FireStore collections, no need to change this
 Collection='2FA'
 tempCollection='temp_2FA'
+
+Keys_Collection = "Keys"
+idToKey_Collection = "id-addr"
+KeyToAddr_Collection = "addr-id"
 
 
 #Discord auth token
@@ -39,7 +47,7 @@ qr = qrcode.QRCode(
         border=5)
 
 #Bot stuff
-bot = commands.Bot(command_prefix=prefix, intents=discord.Intents.all())
+bot = commands.Bot(command_prefix=prefix)
 embed=discord.Embed()
 slash=SlashCommand(bot, sync_commands=True)
 
@@ -48,186 +56,283 @@ cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
+#Siri config
+siri = siriCoin(node_URL)
+
 #Just a header, no need to change this
 headers = {
     'content-type': 'text/plain;',
 }
 
+def getUser(addr):
+    doc_ref = db.collection(KeyToAddr_Collection).document(addr)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        dt = requests.post('https://lookupguru.herokuapp.com/lookup', json={'input': doc.to_dict()["id"]}).json()["data"]
+        return dt["username"] + "#" + str(dt["discriminator"])
+    else:
+        return addr
+
+def getAddr(id):
+    doc_ref = db.collection(idToKey_Collection).document(str(id))
+    doc = doc_ref.get()
+
+    if doc.exists:
+        dt = requests.post('https://lookupguru.herokuapp.com/lookup', json={'input': str(id)}).json()["data"]
+        return doc.to_dict()["addr"], dt["username"] + "#" + str(dt["discriminator"]), dt["avatar"]["url"]
+
+    else:
+        return None
 
 
+def CreateWallet(id):
+    WalletName = str(id)
+
+    doc_ref = db.collection(Keys_Collection).document(WalletName)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        return None
+
+    if not doc.exists:
+        priv = "0x" + secrets.token_hex(32)
+        addr = Account.from_key(priv).address
+        doc_ref.set({
+            'address': addr,
+            'privKey': priv
+        })
+
+        db.collection(KeyToAddr_Collection).document(addr).set({
+            'id':str(WalletName)
+        })
+
+        db.collection(idToKey_Collection).document(WalletName).set({
+            'addr':addr
+        })
+
+        return True
 
 
 
 
 @bot.event
 async def on_ready():
-    print('We have logged in as {0.user}'.format(bot))
+    print(colored('We have logged in as {0.user}'.format(bot), "green"))
 
 
-# creation of wallet
-@slash.slash(description='create your wallet')
-async def create(ctx):
-        user = ctx.author.id
-        WalletName = hashlib.md5(str(user).encode('utf-8')).hexdigest() #turn ID into MD5 (not for security)
-        data = '{"jsonrpc": "1.0", "id": "curltest", "method": "createwallet", "params": ["'+str(WalletName) +'"]}' #RPC Data to be sent
-        response = requests.post(RPChost, headers=headers, data=data, auth=(RPCuser, RPCpass)) # get a response
-        json = response.json() # parse json
-        if (str(json["error"])) == "None":
-            embed.add_field(name='Congrats!', value="Your wallet is now created!")
+
+# wallet balance
+@slash.slash(description="shows a users balance")
+async def balance(ctx, member=""):
+    await ctx.defer()
+
+    embed.clear_fields()
+    embed.remove_author()
+    memberError = False
+    Continue = True
+    if not member=="":
+        try:
+            id = int(str(member).replace("<@!", "").replace(">", ""))
+        except:
+            Continue = False
+            embed.add_field(name='Error ❌', value='User not found, please use @UserName on the ``member`` parameter')
             embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
             await ctx.reply(embed=embed)
             embed.clear_fields()
             embed.remove_author()
-        else:
-            if (json["error"])["code"] == -4:
-                embed.add_field(name='Error!', value="Sorry dude, you can only create a wallet per account ;-;")
-                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                await ctx.reply(embed=embed)
-                embed.clear_fields()
-                embed.remove_author()
-            else:
-                embed.add_field(name="Error!", value="Undefined error, please send error code: "+ "``" +str(json["error"]) +"``" + "to " +Contact + ", this error code will be added to the database and it will provide a more usefull error message 👍" ) 
-                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                await ctx.reply(embed=embed)
-                embed.clear_fields()
-                embed.remove_author()
-                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " " + str(ctx.author) + " Experienced undefined error: " +str(json["error"]))
-
-        user = "" 
-        WalletName = ""
-        data = ""
-        response = ""
-        json = ""
-        embed.clear_fields()
-        embed.remove_author()
-
-
-# wallet ballace
-@slash.slash(description="shows your balance")
-async def balance(ctx):
-    user = ctx.author.id
-    WalletName = hashlib.md5(str(user).encode('utf-8')).hexdigest()
-    data = '{"jsonrpc": "1.0", "id":"curltest", "method": "getbalance", "params": [] }'
-    response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-    json = response.json() 
-    if (str(json["error"])) == "None":
-        embed.add_field(name='Balance is:', value=str((json["result"])) + str(" ") +  str(Cointicker))
-        embed.set_author(name=str(ctx.author) + "'s", icon_url=(ctx.author).avatar_url)
-        await ctx.reply(embed=embed)
-        embed.clear_fields()
-        embed.remove_author()
     else:
-        if (json["error"])["message"] == "Requested wallet does not exist or is not loaded":
-            embed.add_field(name="Error!", value="Oops! wallet does not exist, please run " + prefix +"create")
-            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-            await ctx.reply(embed=embed)
-            embed.clear_fields()
-            embed.remove_author()
+        id = ctx.author.id
+
+    if Continue:
+        Continue = False
+        gAddr = getAddr(id)
+
+        if not gAddr == None:
+            addr = gAddr[0]
+            uname = gAddr[1]
+            avatar = gAddr[2]
+            Continue = True
         else:
-            embed.add_field(name="Error!", value="Undefined error, please send error code: "+ "``" +str(json["error"]) +"``" + "to " +Contact + ", this error code will be added to the database and it will provide a more usefull error message 👍" ) 
-            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+            WalletName = str(id)
+            doc_ref = db.collection(idToKey_Collection).document(WalletName)
+            doc = doc_ref.get()
+            if doc.exists:
+                addr = doc.to_dict()["addr"]
+                Continue = True
+            uname = ctx.author
+            avatar = (ctx.author).avatar_url
+
+        if Continue:
+            embed.add_field(name='Balance is:', value=str(float(siri.balance(addr))) + str(" ") +  str(CoinName))
+            embed.set_author(name=str(uname) + "'s", icon_url=avatar)
             await ctx.reply(embed=embed)
             embed.clear_fields()
             embed.remove_author()
 
-    user = ""
+        if not Continue:
+            if CreateWallet(id) == True:
+                embed.add_field(name="Error ❌", value="My bad, please run the command again")
+                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+                await ctx.reply(embed=embed)
+                embed.clear_fields()
+                embed.remove_author()
+
+
     WalletName = ""
-    data = ""
-    response = ""
-    json = ""
     embed.clear_fields()
     embed.remove_author()
 
-# receive funds
-@slash.slash(description='get an address')
-async def receive(ctx):
-    user = ctx.author.id 
-    WalletName = hashlib.md5(str(user).encode('utf-8')).hexdigest()
-    data = '{"jsonrpc": "1.0", "id": "curltest", "method": "getnewaddress", "params": []}' 
-    response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass)) 
-    json = response.json() 
-    if (str(json["error"])) == "None":
-        embed.add_field(name='New address is:', value=json["result"])
-        embed.set_author(name=str(ctx.author) + "'s", icon_url=(ctx.author).avatar_url)
-        await ctx.reply(embed=embed)
-        embed.clear_fields()
-        embed.remove_author()
-    else:
-        if (json["error"])["message"] == "Requested wallet does not exist or is not loaded":
-            embed.add_field(name="Error!", value="Oops! wallet does not exist, please run " + prefix +"create")
-            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-            await ctx.reply(embed=embed)
-            embed.clear_fields()
-            embed.remove_author()
-        else:
-            embed.add_field(name="Error!", value="Undefined error, please send error code: "+ "``" +str(json["error"]) +"``" + "to " +Contact + ", this error code will be added to the database and it will provide a more usefull error message 👍" ) 
-            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-            await ctx.reply(embed=embed)
-            embed.clear_fields()
-            embed.remove_author()
-            print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " " + str(ctx.author) + " Experienced undefined error: " +str(json["error"]))
+# get a users address
+@slash.slash(description='get a users address')
+async def address(ctx, member=""):
+    await ctx.defer()
 
-    user = ""
+    embed.clear_fields()
+    embed.remove_author()
+
+    Continue = True
+    if not member=="":
+        try:
+            id = int(str(member).replace("<@!", "").replace(">", ""))
+        except:
+            Continue = False
+            embed.add_field(name='Error ❌', value='User not found, please use @UserName on the ``member`` parameter')
+            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+            await ctx.reply(embed=embed)
+            embed.clear_fields()
+            embed.remove_author()
+    else:
+        id = ctx.author.id
+
+    if Continue:
+        Continue = False
+        gAddr = getAddr(id)
+        if not gAddr == None:
+            addr = gAddr[0]
+            uname = gAddr[1]
+            avatar = gAddr[2]
+            Continue = True
+        else:
+            WalletName = str(id)
+            doc_ref = db.collection(idToKey_Collection).document(WalletName)
+            doc = doc_ref.get()
+            if doc.exists:
+                addr = doc.to_dict()["addr"]
+                Continue = True
+            uname = ctx.author
+            avatar = (ctx.author).avatar_url
+
+        if Continue:
+            embed.add_field(name='Address is:', value= "``" + addr + "``")
+            embed.set_author(name=str(uname) + "'s", icon_url=avatar)
+            await ctx.reply(embed=embed)
+            embed.clear_fields()
+            embed.remove_author()
+
+
+        if not Continue:
+            if CreateWallet(id) == True:
+                embed.add_field(name="Error ❌", value="My bad, please run the command again")
+                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+                await ctx.reply(embed=embed)
+                embed.clear_fields()
+                embed.remove_author()
+
+
     WalletName = ""
-    data = ""
-    response = ""
-    json = ""
     embed.clear_fields()
     embed.remove_author()
 
 
 # list transactions
 @slash.slash(description='list transactions')
-async def list_transactions(ctx, tx_asked:int=10):
+async def list_transactions(ctx, tx_asked:int=4, member=""):
+    await ctx.defer()
+
+    embed.clear_fields()
+    embed.remove_author()
+
+    Continue = True
+    MemberError = False
+    if not member=="":
+        try:
+            id = int(str(member).replace("<@!", "").replace(">", ""))
+        except:
+            Continue = False
+            MemberError = True
+            embed.add_field(name='Error ❌', value='User not found, please use @UserName on the ``member`` parameter')
+            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+            await ctx.reply(embed=embed)
+            embed.clear_fields()
+            embed.remove_author()
+    else:
+        id = ctx.author.id
+    if Continue:
+        Continue = False
+        gAddr = getAddr(id)
+        if not gAddr == None:
+            addr = gAddr[0]
+            uname = gAddr[1]
+            avatar = gAddr[2]
+            Continue = True
+        else:
+            WalletName = str(id)
+            doc_ref = db.collection(idToKey_Collection).document(WalletName)
+            doc = doc_ref.get()
+            if doc.exists:
+                addr = doc.to_dict()["addr"]
+                Continue = True
+            uname = ctx.author
+            avatar = (ctx.author).avatar_url
+
+    if Continue:
+
         ValueError=False
-        if(tx_asked==0): await ctx.reply('https://tenor.com/view/house-explosion-explode-boom-kaboom-gif-19506150'); ValueError=True
+        if (tx_asked==0): await ctx.reply('https://tenor.com/view/house-explosion-explode-boom-kaboom-gif-19506150'); ValueError=True
 
-        if not ValueError==True:
-            user = ctx.author.id
-            WalletName = hashlib.md5(str(user).encode('utf-8')).hexdigest()
-            data = '{"jsonrpc": "1.0", "id": "curltest", "method": "getwalletinfo", "params": []}'
-            response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-            json = response.json()
-
-            if not json["error"] == None:
-                if (json["error"])["message"] == "Requested wallet does not exist or is not loaded":
-                    embed.add_field(name="Error!", value="Oops! wallet does not exist, please run " + prefix +"create")
-                    embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                    await ctx.reply(embed=embed)
-                    embed.clear_fields()
-                    embed.remove_author()
-                else:
-                    embed.add_field(name="Error!", value="Undefined error, please send error code: "+ "``" +str(json["error"]) +"``" + "to " +Contact + ", this error code will be added to the database and it will provide a more usefull error message 👍" ) 
-                    embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                    await ctx.reply(embed=embed)
-                    embed.clear_fields()
-                    embed.remove_author()
-                    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " " + str(ctx.author) + " Experienced undefined error: " +str(json["error"]))
-            else:
+        if not ValueError:
+                response = requests.get(node_URL+"/accounts/accountInfo/" + addr)
+                tx_s = json.loads(response.text)["result"]["transactions"]
+                tx_s = tx_s[1:][::-1] # Remove first value (None) and then reverse the list
                 embed.add_field(name="Transactions:", value='\n\u200b')
-                lastTX=''
-                for i in range (1,tx_asked+1):
-                    data = '{"jsonrpc": "1.0", "id": "curltest", "method": "listtransactions", "params": ["*", '+str(i) +']}'
-                    response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-                    json = response.json() 
-                    json = json["result"]
 
-                    if not lastTX==str(json[0]["txid"]):
-                        if (json[0]["category"]=='receive'): embed.add_field(name=f"You received " + str(decimal.Decimal(str(json[0]["amount"]))).replace('+', '') + str(" ") + str(Cointicker) + str(" at: ") +str(str(datetime.utcfromtimestamp(int(json[0]["time"])))), value=(f" **From address:** " + str(json[0]["address"]) + str(" [explorer]" + explorer + str(json[0]["txid"]) + str(")")) + "\n **Confirmations:** " +str(json[0]["confirmations"])), inline=False); lastTX=str(json[0]["txid"])
-                        if (json[0]["category"]=='send'): embed.add_field(name=f"You sent: " + str(decimal.Decimal(str(json[0]["amount"]))).replace('-', '') + str(" ") + str(Cointicker) + str(" at: ") +str(str(datetime.utcfromtimestamp(int(json[0]["time"])))) , value=(f" **To address:** " + str(json[0]["address"]) + str(" [explorer](" + explorer + str(json[0]["txid"]) + str(")" + "\n **Confirmations:** " +str(json[0]["confirmations"])))), inline=False);        lastTX=str(json[0]["txid"])
-                embed.set_author(name=str(ctx.author) + "'s", icon_url=(ctx.author).avatar_url)
-                await ctx.reply(embed=embed)
-                embed.clear_fields()
-                embed.remove_author()
-        
-        user = ""
-        WalletName = ""
-        data = ""
-        response = ""
-        json = ""
-        lastTX=""
-        embed.clear_fields()
-        embed.remove_author()
+                if tx_asked > len(tx_s):
+                    tx_asked = len(tx_s)
+
+                for i in range (0, tx_asked):
+                    response = requests.get(node_URL+"/get/transaction/" + tx_s[i])
+                    tx = json.loads(json.loads(response.text)["result"]["data"])
+                    if tx["type"] == 0:
+                        if tx["to"] == addr:
+                            embed.add_field(name="📈 Received " + str(float(tx["tokens"])) + str(" ") + str(Cointicker), value=(" **From:** ``" + getUser(tx["from"]) + str("``, [Explorer](" + explorer + str(json.loads(response.text)["result"]["hash"]) + str(")"))), inline=False)
+                        else:
+                            embed.add_field(name="📉 Sent: " + str(float(tx["tokens"])) + str(" ") + str(Cointicker) , value=(" **To:** ``" + getUser(tx["to"]) + str("``, [Explorer](" + explorer + str(json.loads(response.text)["result"]["hash"]) + str(")"))), inline=False)
+                    if tx["type"] == 1:
+                        embed.add_field(name="⛏️ Hit block", value=("Reward: " + str(float(BlockReward))  + ' ' + Cointicker + str(", [Explorer](" + explorer + str(json.loads(response.text)["result"]["hash"]) + str(")"))), inline=False)
+                    if tx["type"] == 2:
+                        w3_tx = DecodeRawTX(tx["rawTx"])
+                        if w3_tx[1] == addr:
+                            embed.add_field(name="📈 Received " + str(float(w3_tx[2])) + str(" ") + str(Cointicker), value=(" **From:** ``" + str(w3_tx[0]) + str("``, [Explorer](" + explorer + str(json.loads(response.text)["result"]["hash"]) + str(")"))), inline=False)
+                        else:
+                            embed.add_field(name="📉 Sent: " + str(float(w3_tx[2])) + str(" ") + str(Cointicker) , value=(" **To:** ``" + str(w3_tx[1]) + str("``, [Explorer](" + explorer + str(json.loads(response.text)["result"]["hash"]) + str(")"))), inline=False)
+
+
+                embed.set_author(name=str(uname) + "'s", icon_url=avatar)
+                try:
+                    await ctx.reply(embed=embed)
+                except:
+                    embed.clear_fields()
+                    embed.remove_author()
+                    await (ctx.channel).send(ctx.author.mention + ", Please lower the ammount of TX's asked, if you need to see more transactions please use the Explorer https://explorer.siricoin.tech/address.html?address=" + addr)
+    if not Continue and not MemberError:
+        if CreateWallet(id) == True:
+            embed.add_field(name="Error ❌", value="My bad, please run the command again")
+            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+            await ctx.reply(embed=embed)
+            embed.clear_fields()
+            embed.remove_author()
+    
 
 
 
@@ -235,6 +340,11 @@ async def list_transactions(ctx, tx_asked:int=10):
 #Enable 2FA
 @slash.slash(description='enable 2fa')
 async def enable2fa(ctx):
+    await ctx.defer()
+
+    embed.clear_fields()
+    embed.remove_author()
+
     doc_ref = db.collection(Collection).document(str(ctx.author.id))
     doc = doc_ref.get()
 
@@ -277,6 +387,11 @@ async def enable2fa(ctx):
 # verify 2FA
 @slash.slash(description='Verify that you have setup 2FA successfully')
 async def verify(ctx, otp_input:int):
+    await ctx.defer()
+
+    embed.clear_fields()
+    embed.remove_author()
+
     doc_ref = db.collection(Collection).document(str(ctx.author.id))
     doc = doc_ref.get()
 
@@ -331,73 +446,45 @@ async def verify(ctx, otp_input:int):
 
 # send a transaction
 @slash.slash(description='Send a Transaction')
-async def send(ctx, amount, to_address, otp_input=0):
-    
-    doc_ref = db.collection(Collection).document(str(ctx.author.id))
-    doc = doc_ref.get()
-            
+async def send(ctx, amount, to_, otp_input=0):
+    await ctx.defer()
 
-    if doc.exists: 
+    embed.clear_fields()
+    embed.remove_author()
+
+    continue_ = True 
+    MemberError = False
+
+    if not str(to_).startswith("0x"):
+        try:
+            id = int(str(to_).replace("<@!", "").replace(">", ""))
+            to_ = getAddr(id)[0]
+        except:
+            continue_ = False
+            MemberError = True
+            embed.add_field(name='Error ❌', value='Wallet not found, please use @UserName or ``0xSiriWallet`` on the ``to`` parameter)')
+            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+            await ctx.reply(embed=embed)
+            embed.clear_fields()
+            embed.remove_author()
+            continue_ = False
+
+    if continue_:
+        WalletName = str(ctx.author.id)
+    
+        doc_ref = db.collection(Collection).document(str(ctx.author.id))
+        doc = doc_ref.get()
+
+        keys_doc_ref = db.collection(Keys_Collection).document(WalletName)
+        keys_doc = keys_doc_ref.get()
+
+    if doc.exists and continue_: 
         totp = pyotp.TOTP(doc.to_dict()['base32Secret'])
 
         if int(totp.now())==int(otp_input):
-            user = ctx.author.id
-            WalletName = hashlib.md5(str(user).encode('utf-8')).hexdigest()
-            data = '{"jsonrpc": "1.0", "id":"curltest", "method": "sendtoaddress", "params": ["' +str(to_address) +'", '+str(amount) +'] }'
-            response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-            json = response.json()
-            if json["error"] == None:
-                embed.add_field(name='Success!', value='You sucsessfully sent '+str(amount) + " " +Cointicker + ' to: ' + str(to_address) + str(" [explorer](" + explorer + str(json["result"]) + str(")") + " TX ID: " + "\n" + str(json["result"])  ))
-                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                await ctx.reply(embed=embed)
-                embed.clear_fields()
-                embed.remove_author()
-            else:
-                if (json["error"])["message"] == "Insufficient funds":
-                    data = '{"jsonrpc": "1.0", "id":"curltest", "method": "getbalance", "params": [] }'
-                    response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-                    json = response.json() 
-                    embed.add_field(name="Error!", value="Oops! You have insuficient funds, you only have: " + str(json['result']) + " " + Cointicker)
-                    embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                    await ctx.reply(embed=embed)
-                    embed.clear_fields()
-                    embed.remove_author()
-                else:
-                    if (json["error"])["message"] == "Invalid address":
-                        embed.add_field(name="Error!", value="Oops! Invalid address ;-;")
-                        embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                        await ctx.reply(embed=embed)
-                        embed.clear_fields()
-                        embed.remove_author()
-                    else:
-                        if doc.exists and otp_input==0:
-                            embed.add_field(name='Error!',value="Please enter the OTP after the address!")
-                            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                            await ctx.reply(embed=embed)
-                            embed.clear_fields()
-                            embed.remove_author()
-                        else:
-                            if (json["error"])["message"] == "Transaction amount too small":
-                                embed.add_field(name="Error!", value="Transaction amount too small, please increase it")
-                                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                                await ctx.reply(embed=embed)
-                                embed.clear_fields()
-                                embed.remove_author()
-                            else:
-                                if (json["error"])["message"] == "Requested wallet does not exist or is not loaded":
-                                    embed.add_field(name="Error!", value="Oops! wallet does not exist, please run " + prefix +"create")
-                                    embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                                    await ctx.reply(embed=embed)
-                                    embed.clear_fields()
-                                    embed.remove_author()
-                                else:
-                                    embed.add_field(name="Error!", value="Undefined error, please send error code: "+ "``" +str(json["error"]) +"``" + "to " +Contact + ", this error code will be added to the database and it will provide a more usefull error message 👍" ) 
-                                    embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                                    await ctx.reply(embed=embed)
-                                    embed.clear_fields()
-                                    embed.remove_author()
-                                    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " " + str(ctx.author) + " Experienced undefined error: " +str(json["error"]))
+            continue_ = True
         else:
+
             if doc.exists and otp_input!=0:
                 embed.add_field(name='Error!', value="Wrong OTP!")
                 embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
@@ -412,65 +499,42 @@ async def send(ctx, amount, to_address, otp_input=0):
                 embed.clear_fields()
                 embed.remove_author()
 
-
-                    
-
-    if not doc.exists:
-        user = ctx.author.id 
-        WalletName = hashlib.md5(str(user).encode('utf-8')).hexdigest()
-        data = '{"jsonrpc": "1.0", "id":"curltest", "method": "sendtoaddress", "params": ["' +str(to_address) +'", '+str(amount) +'] }'
-        response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-        json = response.json() 
-
-        if json["error"] == None:
-            embed.add_field(name='Success!', value='You sucsessfully sent '+str(amount) + " " +Cointicker + ' to: ' + str(to_address) + str(" [explorer](" + explorer + str(json["result"]) + str(")") + " TX ID: " + "\n" + str(json["result"])  ))
+    if not keys_doc.exists and continue_ and not MemberError:
+        continue_ = False
+        if CreateWallet(int(WalletName)) == True:
+            embed.add_field(name="Error ❌", value="My bad, please run the command again")
             embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
             await ctx.reply(embed=embed)
             embed.clear_fields()
             embed.remove_author()
-        else:
-            if (json["error"])["message"] == "Insufficient funds":
-                data = '{"jsonrpc": "1.0", "id":"curltest", "method": "getbalance", "params": [] }'
-                response = requests.post(RPChost+'wallet/'+str(WalletName), headers=headers, data=data, auth=(RPCuser, RPCpass))
-                json = response.json() 
-                embed.add_field(name="Error!", value="Oops! You have insuficient funds, you only have: " + str(json['result']) + " " + Cointicker)
+
+    if continue_:
+        if not siri.is_address(to_):
+            embed.add_field(name='Error ❌', value="Invalid recipient!")
+            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+            await ctx.reply(embed=embed)
+            embed.clear_fields()
+            embed.remove_author()
+
+        if siri.is_address(to_):
+            if (amount == 0) or (float(amount) > float(siri.balance(str(keys_doc.to_dict()["address"])))) :
+                embed.add_field(name='Error ❌', value="Insufficient funds, you have: " + str(siri.balance(keys_doc.to_dict()["address"])) + " " + Cointicker)
                 embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
                 await ctx.reply(embed=embed)
                 embed.clear_fields()
                 embed.remove_author()
             else:
-                if (json["error"])["message"] == "Invalid address":
-                    embed.add_field(name="Error!", value="Oops! Invalid address ;-;")
-                    embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                    await ctx.reply(embed=embed)
-                    embed.clear_fields()
-                    embed.remove_author()
-                else:
-                    if (json["error"])["message"] == "Transaction amount too small":
-                        embed.add_field(name="Error!", value="Transaction amount too small, please increase it")
-                        embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                        await ctx.reply(embed=embed)
-                        embed.clear_fields()
-                        embed.remove_author()
-                    else:
-                        if (json["error"])["message"] == "Requested wallet does not exist or is not loaded":
-                            embed.add_field(name="Error!", value="Oops! wallet does not exist, please run " + prefix +"create")
-                            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                            await ctx.reply(embed=embed)
-                            embed.clear_fields()
-                            embed.remove_author()
-                        else:
-                            embed.add_field(name="Error!", value="Undefined error, please send error code: "+ "``" +str(json["error"]) +"``" + "to " +Contact + ", this error code will be added to the database and it will provide a more usefull error message 👍" ) 
-                            embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
-                            await ctx.reply(embed=embed)
-                            embed.clear_fields()
-                            embed.remove_author()
-                            print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " " + str(ctx.author) + " Experienced undefined error: " +str(json["error"]))
-    user = ""
+                txID = siri.transaction(keys_doc.to_dict()["privKey"], keys_doc.to_dict()["address"], to_, amount)
+                    
+                embed.add_field(name='Success!', value='You sent '+str(amount) + " " +Cointicker + ' to: ``' + getUser(to_) + str("``, [explorer](" + explorer + str(txID) + str(")") + "\n **TX ID:** ``"  + str(txID) + "``" ))
+                embed.set_author(name=str(ctx.author), icon_url=(ctx.author).avatar_url)
+                await ctx.reply(embed=embed)
+                embed.clear_fields()
+                embed.remove_author()
+
+
+
     WalletName = ""
-    data = ""
-    response = ""
-    json = ""
     embed.clear_fields()
     embed.remove_author()
             
