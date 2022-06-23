@@ -1,7 +1,5 @@
 # Discord-Crypto-wallet
 
-### [Setup](https://github.com/the-red-eye-studio/Discord-Crypto-wallet/wiki/Setup)
-
 **Pros and cons:**
 | Feature  | Exists |
 | - | -|
