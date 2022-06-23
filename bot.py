@@ -9,12 +9,16 @@ BlockReward = 50
 
 Contact = "@The Red Eye Studio#8319"
 
+HelpURL = "https://github.com/Red-Siri/Siricoin-Discord-Wallet/wiki/Commands"
+gitrepo = "https://github.com/Red-Siri/Siricoin-Discord-Wallet"
+
 
 
 
 #ADVANCED SECTION, you may keep this as is
 
 prefix = '/'
+Creator = "[the-red-eye-studio](https://github.com/the-red-eye-studio/)"
 
 #Imports
 from termcolor import colored
@@ -24,6 +28,12 @@ from firebase_admin import credentials, firestore
 from eth_account import Account
 from siricoin import siriCoin
 from Web3Decode import DecodeRawTX
+from discord_slash.model import ButtonStyle
+from discord_slash.utils.manage_components import (
+    ComponentContext,
+    create_actionrow,
+    create_button,
+)
 import requests, discord, os, pyotp, firebase_admin, qrcode, secrets, json
 
 
@@ -120,7 +130,23 @@ def CreateWallet(id):
 async def on_ready():
     print(colored('We have logged in as {0.user}'.format(bot), "green"))
 
+@slash.slash(description="help message")
+async def help(ctx):
+    embed.add_field(name="Maintained by: ", value=Contact, inline=False)
+    embed.add_field(name="Created by: ", value=Creator, inline=False)
+    actionrow = create_actionrow(
+        *[
+            create_button(
+                label="Command documentation", url=HelpURL, style=ButtonStyle.URL
+            ),
+            create_button(
+                label="Github repository", url=gitrepo, style=ButtonStyle.URL
+            )
+        ]
+    )
 
+    await ctx.send(embed=embed, components=[actionrow])
+    embed.clear_fields()
 
 # wallet balance
 @slash.slash(description="shows a users balance")
@@ -129,7 +155,6 @@ async def balance(ctx, member=""):
 
     embed.clear_fields()
     embed.remove_author()
-    memberError = False
     Continue = True
     if not member=="":
         try:
