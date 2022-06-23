@@ -22,6 +22,8 @@ You may test it out in my [discord server](https://discord.gg/RVMEKjQgcG) or by 
 **Images:**  
 ![image](https://user-images.githubusercontent.com/75716744/175261331-fe4f5ca5-fa0f-4430-b054-0806b242685d.png)
 
+**Donate:**  
+``0x3Dd8c9f9E0c998fF1E98cbc8a210ef5Fa55471eb``
 
 
 **Special thanks to:**  
