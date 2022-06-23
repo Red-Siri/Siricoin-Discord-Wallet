@@ -1,4 +1,4 @@
-# Discord-Crypto-wallet
+# Siricoin Discord wallet
 
 **Pros and cons:**
 | Feature  | Exists |
